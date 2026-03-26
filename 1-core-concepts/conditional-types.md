@@ -2,55 +2,92 @@
 
 Create types that depend on conditions, enabling sophisticated type logic.
 
-## Basic Conditional Type
+## Pattern
 
 ```typescript
-type IsString<T> = T extends string ? true : false;
-
-type A = IsString<string>; // true
-type B = IsString<number>; // false
+type Result<T> = T extends string ? "yes" : "no";
 ```
 
-## Extracting with Infer
+When the condition is `true`, return the first branch. When `false`, return the second.
 
-The `infer` keyword extracts a type from within a conditional:
+---
+
+## When You Need to Filter Union Types
+
+Use conditional types to exclude or include specific union members:
 
 ```typescript
+// Exclude null and undefined
+type NonNullable<T> = T extends null | undefined ? never : T;
+
+type Clean = NonNullable<string | null | undefined>; // string
+
+// Exclude specific string literals
+type NotAdmin<T> = T extends "admin" ? never : T;
+
+type Role = NotAdmin<"admin" | "user" | "guest">; // "user" | "guest"
+```
+
+---
+
+## When You Need to Extract Nested Types
+
+Use `infer` inside a conditional to extract parts of a type:
+
+```typescript
+// Extract the return type of a function
 type ReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
 
 function getUser() {
   return { id: 1, name: "John" };
 }
 
-type User = ReturnType<typeof getUser>;
-// Type: { id: number; name: string; }
-```
+type User = ReturnType<typeof getUser>; // { id: number; name: string }
 
-## Extracting Function Parameters
-
-```typescript
+// Extract function parameters
 type Parameters<T> = T extends (...args: infer P) => any ? P : never;
 
 function greet(name: string, age: number): void {}
 
-type Params = Parameters<typeof greet>;
-// Type: [name: string, age: number]
+type Params = Parameters<typeof greet>; // [name: string, age: number]
 ```
 
-## Distributive Conditional Types
+---
 
-When the type parameter is a union, conditional types distribute over each member:
+## When You Need to Unwrap Promises
+
+Use recursive conditional types to flatten nested promises:
+
+```typescript
+type Awaited<T> = T extends Promise<infer U>
+  ? U extends Promise<infer V>
+    ? Awaited<U> // Recurse for deeper nesting
+    : U
+  : T;
+
+type A = Awaited<Promise<number>>;              // number
+type B = Awaited<Promise<Promise<User>>>;       // User
+type C = Awaited<Promise<Promise<Promise<T>>>>;  // T
+```
+
+---
+
+## When You Need to Transform Each Union Member
+
+Let the conditional type distribute over unions:
 
 ```typescript
 type ToArray<T> = T extends any ? T[] : never;
 
-type StrOrNumArray = ToArray<string | number>;
-// Type: string[] | number[]
+type Arrays = ToArray<string | number | boolean>;
+// string[] | number[] | boolean[]
 ```
 
-## Nested Conditions
+---
 
-Chain conditions for complex type logic:
+## When You Need to Check the Type Category
+
+Chain conditions for type-level branching:
 
 ```typescript
 type TypeName<T> = T extends string
@@ -66,50 +103,15 @@ type TypeName<T> = T extends string
           : "object";
 
 type T1 = TypeName<string>;              // "string"
-type T2 = TypeName<() => void>;         // "function"
-type T3 = TypeName<{ a: number }>;      // "object"
+type T2 = TypeName<() => void>;           // "function"
+type T3 = TypeName<{ a: number }>;        // "object"
 ```
 
-## Practical Example: Unwrap Promise
+---
 
-```typescript
-type Awaited<T> = T extends Promise<infer U>
-  ? U extends Promise<infer V>
-    ? Awaited<U>
-    : U
-  : T;
+## When You Need to Build Type-Safe APIs
 
-type Num = Awaited<Promise<number>>;           // number
-type User = Awaited<Promise<Promise<User>>>;   // User
-```
-
-## keyof with Conditional Types
-
-```typescript
-type Pick<T, K> = T extends any ? (K extends keyof T ? T[K] : never) : never;
-
-type Name = Pick<{ name: string; age: number }, "name">;
-// Type: string
-```
-
-## Common Patterns
-
-```typescript
-// Filter out null and undefined
-type NonNullable<T> = T extends null | undefined ? never : T;
-
-// Get the element type of an array
-type ElementOf<T> = T extends (infer E)[] ? E : never;
-
-// Check if type is any
-type IsAny<T> = 0 extends 1 & T ? true : false;
-```
-
-## Real-World Examples
-
-### Example 1: Extracting API Response Types
-
-When building an HTTP client package, extract response types from fetch functions:
+Extract response types from API endpoint definitions:
 
 ```typescript
 type UnwrapResponse<T> = T extends () => Promise<{ data: infer R }>
@@ -118,7 +120,6 @@ type UnwrapResponse<T> = T extends () => Promise<{ data: infer R }>
     ? R
     : never;
 
-// Define your API endpoints
 async function fetchUser(): Promise<{ data: User }> {
   return { data: { id: "1", name: "John" } };
 }
@@ -127,50 +128,15 @@ async function fetchPosts(): Promise<Post[]> {
   return [{ id: "1", title: "Post 1" }];
 }
 
-// Extract the data type automatically
-type UserResponse = UnwrapResponse<typeof fetchUser>;   // User
+type UserResponse = UnwrapResponse<typeof fetchUser>;    // User
 type PostsResponse = UnwrapResponse<typeof fetchPosts>;  // Post[]
 ```
 
-### Example 2: Type-Safe Database Query Builder
+---
 
-When building a query builder, use conditional types to infer return types:
+## When You Need to Extract from Discriminated Unions
 
-```typescript
-interface QueryResult<T> {
-  rows: T[];
-  rowCount: number;
-}
-
-type ExtractEntity<T> = T extends Table<infer E> ? E : never;
-
-interface Table<T> {
-  name: string;
-}
-
-interface Database {
-  query<T extends string>(sql: T): Promise<QueryResult<unknown>>;
-}
-
-function createTable<T>(name: string): Table<T> {
-  return { name } as Table<T>;
-}
-
-// Usage
-const usersTable = createTable<User>("users");
-const postsTable = createTable<Post>("posts");
-
-async function getAll<T extends Table<any>>(table: T): Promise<QueryResult<ExtractEntity<T>>[]> {
-  return db.query(`SELECT * FROM ${table.name}`);
-}
-
-const results = await getAll(usersTable);
-// Type: QueryResult<User>[]
-```
-
-### Example 3: Discriminated Union Type Extraction
-
-When building a state management library, extract specific states:
+Pull out specific variants from a union:
 
 ```typescript
 type State =
@@ -179,54 +145,43 @@ type State =
   | { status: "success"; data: User }
   | { status: "error"; error: Error };
 
-// Extract only the success state type
-type SuccessState<T> = T extends { status: "success"; data: infer D } ? D : never;
+// Extract the data type from success states
+type ExtractData<T> = T extends { status: "success"; data: infer D } ? D : never;
 
-type UserFromState = SuccessState<State>; // User
+type UserData = ExtractData<State>; // User
 
-// Extract only the error state type
-type ErrorState<T> = T extends { status: "error"; error: infer E } ? E : never;
+// Extract error type
+type ExtractError<T> = T extends { status: "error"; error: infer E } ? E : never;
 
-type ErrorFromState = ErrorFromState<State>; // Error
+type ErrorType = ExtractError<State>; // Error
 ```
 
-### Example 4: Type-Safe Route Parameters
+---
 
-When building a router package, extract parameter types from route patterns:
+## When You Need to Extract Route Parameters
+
+Use template literals with infer to parse paths:
 
 ```typescript
-type ExtractRouteParams<T extends string> =
+type ExtractParams<T extends string> =
   T extends `${string}:${infer Param}/${infer Rest}`
-    ? Param | ExtractRouteParams<`/${Rest}`>
+    ? Param | ExtractParams<`/${Rest}`>
     : T extends `${string}:${infer Param}`
       ? Param
       : never;
 
-type Params = ExtractRouteParams<"/users/:userId/posts/:postId">;
+type Params = ExtractParams<"/users/:userId/posts/:postId">;
 // "userId" | "postId"
 
-// Type-safe route handler
-interface Route<T extends string> {
-  path: T;
-  params: ExtractRouteParams<T>;
-  handler: (params: Record<ExtractRouteParams<T>, string>) => void;
-}
-
-function createRoute<T extends string>(path: T): Route<T> {
-  return {
-    path,
-    params: undefined as any,
-    handler: () => {},
-  };
-}
-
-const route = createRoute("/users/:userId/posts/:postId");
-// route.params = "userId" | "postId"
+type Single = ExtractParams<"/users/:id">;
+// "id"
 ```
 
-### Example 5: Conditional Type for Plugin System
+---
 
-When building an extensible plugin system:
+## When You Need to Extract from Plugin Systems
+
+Use conditional types to unwrap plugin state:
 
 ```typescript
 interface Plugin<State = any> {
@@ -236,33 +191,73 @@ interface Plugin<State = any> {
 
 type PluginState<T> = T extends Plugin<infer S> ? S : never;
 
-function registerPlugin<T extends Plugin>(plugin: T): PluginState<T> {
-  return plugin.state as PluginState<T>;
-}
-
-// Usage
 const authPlugin = { name: "auth", state: { isAuthenticated: false, user: null } };
 const configPlugin = { name: "config", state: { theme: "dark", language: "en" } };
 
-type AuthState = PluginState<typeof authPlugin>;   // { isAuthenticated: boolean; user: null }
+type AuthState = PluginState<typeof authPlugin>;    // { isAuthenticated: boolean; user: null }
 type ConfigState = PluginState<typeof configPlugin>; // { theme: string; language: string }
 ```
 
-## When to Use Conditional Types
+---
 
-| Scenario | Example |
-|----------|---------|
-| Extracting types from promises | `Awaited<Promise<T>>` |
-| Building query builders | `ExtractEntity<Table<T>>` |
-| Creating plugin systems | `PluginState<T>` |
-| Route parameter extraction | `ExtractRouteParams<"/users/:id">` |
-| Filtering union types | `SuccessState<State>` |
-| Type-safe API clients | `UnwrapResponse<fetchFn>` |
+## When You Need to Prevent Distribution
+
+Wrap in brackets to treat union as a single type:
+
+```typescript
+// Without brackets - distributes over union
+type Test1 = string extends any ? "yes" : "no"; // "yes" | "no"
+
+// With brackets - treats as single type
+type Test2 = [string] extends [any] ? "yes" : "no"; // "yes"
+
+// Practical use: strict equality check
+type IsNever<T> = [T] extends [never] ? true : false;
+
+type T1 = IsNever<never>;       // true
+type T2 = IsNever<string>;      // false
+```
+
+---
+
+## When You Need to Build a Query Builder
+
+Combine conditional types with generics for type-safe builders:
+
+```typescript
+interface Table<T> {
+  name: string;
+}
+
+interface QueryResult<T> {
+  rows: T[];
+  rowCount: number;
+}
+
+type ExtractEntity<T> = T extends Table<infer E> ? E : never;
+
+function createTable<T>(name: string): Table<T> {
+  return { name } as Table<T>;
+}
+
+async function getAll<T extends Table<any>>(
+  table: T
+): Promise<QueryResult<ExtractEntity<T>>[]> {
+  return db.query(`SELECT * FROM ${table.name}`);
+}
+
+const users = createTable<User>("users");
+const results = await getAll(users);
+// results is QueryResult<User>[]
+```
+
+---
 
 ## Key Takeaways
 
-- Conditional types distribute over unions
-- Use `infer` to extract types from within conditional branches
-- Use `[T] extends [U]` to prevent distribution when needed
-- Essential for building type-safe libraries and packages
-- Combine with mapped types for complex transformations
+- Conditional types distribute over unions automatically
+- Use `infer` to extract types from branches
+- Use `[T] extends [U]` to prevent distribution
+- Chain conditions for complex type-level logic
+- Recursive conditional types handle nested types
+- Combine with template literals for string parsing
