@@ -50,40 +50,6 @@ typescript-master/
 └── SKILL.md              # Main skill file
 ```
 
-## Topics Covered
-
-- **Generics & Constraints** — Reusable, type-safe components
-- **Conditional Types** — Type-level logic and branching
-- **Mapped Types** — Property transformation and iteration
-- **Template Literal Types** — Type-safe string patterns
-- **Branded Types** — Nominal typing for domain primitives
-- **Higher Kinded Types** — Functor/Monad patterns in TypeScript
-- **Type Inference** — Extraction and automatic type discovery
-- **Type Guards & Assertions** — Runtime narrowing for compile-time safety
-- **Design Patterns** — Event emitters, API clients, builders, validators
-- **Performance** — Type checking speed and build optimization
-- **Migration** — JavaScript to TypeScript, tool upgrades
-- **Monorepo** — Project references, Nx, Turborepo
-
-## Quick Start
-
-1. Start with [Core Concepts](./1-core-concepts/README.md) for foundational knowledge
-2. Progress to [Advanced Types](./2-advanced-types/README.md) for type-level programming
-3. Apply [Patterns](./3-patterns/README.md) to real-world scenarios
-4. Master [Type Inference](./4-type-inference/README.md) for automatic typing
-5. Follow [Best Practices](./5-best-practices/README.md) for clean code
-
-## For AI Agents
-
-This documentation follows specific constraints:
-
-- Non-interactive operations only
-- Never skip hooks or validation
-- Use `--force-with-lease` for branch updates
-- Type-first API design workflow
-- Branded types for domain modeling
-- Discriminated unions for state machines
-
 ## Contributing
 
 Contributions welcome! Please read the documentation and follow the existing patterns.
