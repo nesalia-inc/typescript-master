@@ -57,6 +57,8 @@ type PersonGetters = Getters<Person>;
 // Type: { getName: () => string; getAge: () => number; }
 ```
 
+> **Senior Note:** The `as` clause only transforms the **key**. The value definition goes on the right side of the colon, not inside `as`. If a key maps to `never` in the `as` clause, the property is removed entirely.
+
 ## Filtering Properties
 
 ```typescript
@@ -95,16 +97,27 @@ type NoBooleans = ExcludeByType<Mixed, boolean>;
 | Readonly | `readonly` | Makes property readonly |
 | Mutable | `-readonly` | Removes readonly |
 
+## The `Prettify` Helper
+
+Complex mapped types (especially intersections like `RequiredKeys`) produce unreadable IDE hover text showing `TypeA & TypeB` instead of the resolved object. Use `Prettify` to flatten:
+
+```typescript
+type Prettify<T> = {
+  [K in keyof T]: T[K];
+} & {};
+```
+
+This forces TypeScript to "expand" the type for better readability in editors.
+
 ## Real-World Example: Deep Partial
 
 ```typescript
-type DeepPartial<T> = {
-  [P in keyof T]?: T[P] extends object
-    ? T[P] extends Array<infer U>
-      ? Array<DeepPartial<U>>
-      : DeepPartial<T[P]>
-    : T[P];
-};
+// Handle built-in types that should not be made partial
+type DeepPartial<T> = T extends Date | RegExp | Map<any, any> | Set<any, any>
+  ? T
+  : T extends object
+    ? { [K in keyof T]?: DeepPartial<T[K]> }
+    : T;
 
 interface Config {
   server: {
@@ -115,7 +128,10 @@ interface Config {
 
 type PartialConfig = DeepPartial<Config>;
 // { server?: { host?: string; port?: number } }
+// Date/Map/Set properties remain unchanged
 ```
+
+> **Senior Note:** Without the built-in type guard, `DeepPartial` would attempt to make `Date`'s internal methods optional, breaking them entirely.
 
 ## Real-World Example: Required Keys Only
 
@@ -132,8 +148,9 @@ interface User {
   email?: string;
 }
 
-type UserRegistration = RequiredKeys<User, "id" | "name">;
-// { id: string; name: string; email?: string; }
+// Use Prettify for better IDE display
+type UserRegistration = Prettify<RequiredKeys<User, "id" | "name">>;
+// Hovering shows: { id: string; name: string; email?: string; }
 ```
 
 ## Template Literals in Mapped Types
@@ -161,17 +178,20 @@ When building an ORM that generates API schemas from database models:
 ```typescript
 interface DatabaseModel {
   id: string;
+  passwordHash: string;
+  internalId: number;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
 }
 
-interface ApiSchema<T> {
-  [K in keyof T]: T[K] extends Date | null ? string : T[K];
-}
+// Exclude sensitive/internal fields and transform Date to string
+type PublicApi<T> = {
+  [K in keyof T as K extends "passwordHash" | "internalId" ? never : K]: T[K] extends Date ? string : T[K];
+};
 
 // Transform database timestamps to ISO strings for JSON API
-type UserApiSchema = ApiSchema<DatabaseModel>;
+type UserApiSchema = PublicApi<DatabaseModel>;
 // { id: string; createdAt: string; updatedAt: string; deletedAt: string | null }
 ```
 
@@ -258,14 +278,16 @@ interface GraphQLObject {
 
 // Transform GraphQL schema to TypeScript interface
 type ToTypeScriptInterface<T extends GraphQLObject> = {
-  [K in keyof T["fields"] as `${string & K}`: T["fields"][K]["isRequired"] extends true
-    ? T["fields"][K]["isList"] extends true
-      ? `${string & K}`: T["fields"][K]["type"][]`
-      : `${string & K}`: T["fields"][K]["type"]`
-    : T["fields"][K]["isList"] extends true
-      ? `${string & K}?`: `${string & K}?`]: T["fields"][K]["type"] | null;
+  [K in keyof T["fields"] as string & K]: // 1. Remap the key
+    T["fields"][K]["isList"] extends true
+      ? T["fields"][K]["type"][]          // 2. Define value here
+      : T["fields"][K]["isRequired"] extends true
+        ? T["fields"][K]["type"]
+        : T["fields"][K]["type"] | null;
 };
 ```
+
+> **Senior Note:** The `as` clause handles key transformation only. Value logic (ternaries, conditionals) belongs after the colon, not inside `as`.
 
 ### Example 5: Immutable Update Utilities
 
@@ -300,17 +322,16 @@ const updated = state
 When building a database migration system:
 
 ```typescript
-type ColumnTypes = {
-  string: "VARCHAR";
-  number: "INTEGER";
-  boolean: "BOOLEAN";
-  date: "TIMESTAMP";
-};
+// Helper to keep the mapped type clean
+type MapToCol<T> = T extends string ? "VARCHAR"
+  : T extends number ? "INTEGER"
+  : T extends boolean ? "BOOLEAN"
+  : "JSON";
 
 type ToDatabaseColumn<T> = {
   [K in keyof T]: {
     name: K;
-    type: ColumnTypes[T[K] extends string ? "string" : T[K] extends number ? "number" : T[K] extends boolean ? "boolean" : "date"];
+    type: MapToCol<T[K]>;
     nullable: false;
     primaryKey: K extends "id" ? true : false;
   };
@@ -328,13 +349,23 @@ type UserColumns = ToDatabaseColumn<User>;
 //   age: { name: "age"; type: "INTEGER"; nullable: false; primaryKey: false }
 ```
 
+## When NOT to Use Mapped Types
+
+### Don't Map What You Don't Own
+
+1. **Third-Party Types:** Avoid running complex mapped types over huge library types (like `Express.Request` or `React.ComponentProps`). It drastically slows down the TS compiler and VS Code intellisense.
+
+2. **Circular References:** Mapped types hit "Circular Type" errors easily. If a model refers to itself, `DeepPartial` or `Immutable` types may crash the compiler.
+
+3. **Deep Nesting:** Very deep object graphs (10+ levels) can trigger "Type instantiation is excessively deep" errors. Consider limiting recursion depth or using interfaces.
+
 ## When to Use Mapped Types
 
 | Scenario | Example |
 |----------|---------|
-| Transforming API responses | `ApiSchema<T>` (Date → string) |
+| Transforming API responses | `PublicApi<T>` (exclude sensitive fields, Date → string) |
 | Creating form systems | `FormFieldProps<T>` |
-| Building reactive state | `Observable<T>` |
+| Building reactive state | `CreateObservable<T>` |
 | Generating GraphQL types | `ToTypeScriptInterface<T>` |
 | Immutable update helpers | `WithImmutability<T>` |
 | Database migrations | `ToDatabaseColumn<T>` |
@@ -342,7 +373,11 @@ type UserColumns = ToDatabaseColumn<User>;
 ## Key Takeaways
 
 - Mapped types iterate over `keyof T`
-- Use `as` to remap keys with template literals
-- Use conditional types to filter properties
+- Use `as` to remap keys with template literals (key transformation only, not values)
+- Filter keys by mapping to `never` in the `as` clause
+- Use conditional types in the value position to transform property types
+- Use `Prettify<T>` for readable IDE hover output on complex mapped types
+- Handle built-in types (Date, Map, Set) explicitly in recursive mapped types
+- Avoid mapped types on third-party types or deeply recursive structures
 - Combine with template literals for dynamic property names
 - Essential for code generation and type transformation utilities

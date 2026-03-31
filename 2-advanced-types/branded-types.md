@@ -1,237 +1,252 @@
 # Branded Types
 
-Create nominal types to prevent mixing domain primitives that share the same underlying type.
+> **Decision Tree**: Can't find what you need? Jump to the section:
+> - I have multiple ID types that get mixed up → Strict Branding
+> - I need to validate strings (Email, URL, Password) at input → Brand Factory
+> - I need to prevent USD + EUR calculations → Number Branding
+> - I just want better IDE readability without constraints → Type Flavoring
+> - I need success/failure branching at runtime → Discriminated Union (not a Brand!)
 
-## The Problem
+---
 
-TypeScript's structural type system allows this:
+## Quick Decision Table
 
-```typescript
-type User = {
-  id: string;
-  name: string;
-};
+| If your need is... | Use this pattern |
+|--------------------|------------------|
+| Prevent `string` mixing (UserId, PostId) | **Strict Branding** with `unique symbol` |
+| Validate data at system entry (Email, URL) | **Brand Factory** (validation + type cast) |
+| Prevent currency/unit calculations | **Strict Number Branding** |
+| Better IDE autocomplete without blocking | **Type Flavoring** (optional property) |
+| Runtime branching based on state | **Discriminated Union** |
 
-type Post = {
-  id: string;
-  ownerId: string;
-  comments: Comment[];
-};
+---
 
-type Comment = {
-  id: string;
-  authorId: string;
-  body: string;
-};
+## Concept Clarification
 
-async function getCommentsForPost(postId: string, authorId: string) {
-  const response = await api.get(`/author/${authorId}/posts/${postId}/comments`);
-  return response.data;
-}
+> **Important**: Branded Types and Discriminated Unions solve different problems:
 
-const comments = await getCommentsForPost(user.id, post.id); // OK for TypeScript!
-```
+- **Branded Types**: Compile-time protection against mixing incompatible *values* (e.g., `UserId` vs `PostId`)
+- **Discriminated Unions**: Runtime branching based on a *tag property* (e.g., `{ status: "success", data: T } | { status: "error", error: E })
 
-The arguments are swapped, but TypeScript sees only `string` for all IDs—it cannot catch this error at compile time.
+---
 
-## Naive Branded Types
+## 1. When: Maximum Safety for IDs
 
-Brand a type by intersecting with an object literal containing a `__brand` property:
+**Scenario**: "I have multiple identifier types (User, Post, Org) and I want the compiler to explode if I accidentally pass a PostId where a UserId is expected."
 
-```typescript
-type Brand<K, T> = K & { __brand: T };
-
-type UserId = Brand<string, "UserId">;
-type PostId = Brand<string, "PostId">;
-
-async function getCommentsForPost(postId: PostId, authorId: UserId) {
-  // ...
-}
-
-const comments = getCommentsForPost(user.id, post.id);
-// Error: Argument of type 'UserId' is not assignable to parameter of type 'PostId'
-```
-
-### Downsides of Naive Approach
-
-- `__brand` is a "build-time only" property—it disappears at runtime
-- The property shows up in IntelliSense, tempting developers to access it
-- No protection against duplicate brands since `__brand` is just a string
-- Anyone can manually create `{ __brand: "PostId" }` without validation
-
-## Better Branded Types with Unique Symbol
-
-Use `unique symbol` to create unreproducible brand markers:
-
-```typescript
-declare const __brand: unique symbol;
-
-type Brand<B> = { [__brand]: B };
-
-export type Branded<T, B> = T & Brand<B>;
-```
-
-**Why this is better:**
-
-- `unique symbol` ensures the brand property cannot be manually created
-- No string-based collision—each brand is a distinct symbol
-- The property is still compile-time only (intellisense will show it less prominently)
-
-Place this in a dedicated file to prevent read access to the symbol:
+**Solution**: Strict Branding with `unique symbol`
 
 ```typescript
 // types/brand.ts
 declare const __brand: unique symbol;
 
-export type Brand<B> = { [__brand]: B };
+export type Brand<B> = { readonly [__brand]: B };
 export type Branded<T, B> = T & Brand<B>;
-```
 
-## Creating Brand Factories
-
-Constructor functions enforce validation at the creation point:
-
-```typescript
-import type { Branded } from "./brand";
-
+// usage.ts
 type UserId = Branded<string, "UserId">;
 type PostId = Branded<string, "PostId">;
 
-function createUserId(id: string): UserId {
-  if (!/^[a-zA-Z0-9-]+$/.test(id)) {
-    throw new Error("Invalid UserId format");
-  }
-  return id as UserId;
-}
+function deleteUser(id: UserId): void { ... }
 
-function createPostId(id: string): PostId {
-  if (!/^POST-[a-zA-Z0-9]+$/.test(id)) {
-    throw new Error("Invalid PostId format");
-  }
-  return id as PostId;
-}
+const postId = "post_1" as PostId;
+deleteUser(postId); // ❌ Error: PostId is not assignable to UserId
 ```
 
-## Common Use Cases
+**Why `unique symbol`?** String-based `__brand: "UserId"` can collide or be manually forged. `unique symbol` is a distinct compiler-level symbol that cannot be reproduced.
 
-### Domain Modeling
+---
 
-Prevent mixing primitives that share the same underlying type:
+## 2. When: Validate Format (Email, URL, Password)
+
+**Scenario**: "I want to guarantee that a `string` was validated by my Regex before being used in my services."
+
+**Solution**: Brand Factory (validation + type cast)
 
 ```typescript
-type UserID = Branded<string, "UserID">;
-type PostID = Branded<string, "PostID">;
-type CommentID = Branded<string, "CommentID">;
+type Email = Branded<string, "Email">;
+type URL = Branded<string, "URL">;
+type Password = Branded<string, "Password">;
 
-type User = {
-  id: UserID;
-  name: string;
-};
+// The ONLY place where "as Email" is allowed
+function parseEmail(input: string): Email {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input)) {
+    throw new Error("Invalid email format");
+  }
+  return input as Email;
+}
 
-type Post = {
-  id: PostID;
-  ownerId: UserID;
-  comments: Comment[];
-};
+function sendWelcomeEmail(email: Email): void { ... }
 
-type Comment = {
-  id: CommentID;
-  authorId: UserID;
-  body: string;
-};
+// Forces validation at entry point
+const email = parseEmail("user@example.com");
+sendWelcomeEmail(email); // ✅ OK
+sendWelcomeEmail("not-an-email"); // ❌ Error before even reaching validation
 ```
 
-### Currency
+> **Senior Note**: In a clean architecture, `as MyBrand` should **only** appear in factory/parser functions. If you see `as Brand` in a UI component, it's technical debt.
+
+---
+
+## 3. When: Financial Calculations or Physical Units
+
+**Scenario**: "I manipulate Euros and Dollars, or Grams and Kilograms. `EUR + USD` must be impossible."
+
+**Solution**: Number Branding
 
 ```typescript
-type USD = Branded<number, "USD">;
 type EUR = Branded<number, "EUR">;
+type USD = Branded<number, "USD">;
+type Grams = Branded<number, "Grams">;
+type Kilograms = Branded<number, "Kilograms">;
 
-function convertUSDToEUR(amount: USD, rate: number): EUR {
-  return (amount * rate) as EUR;
-}
+const wallet = 10 as EUR;
+const price = 5 as USD;
 
-const dollars = 100 as USD;
-const euros = convertUSDToEUR(dollars, 0.85);
-// euros is EUR—cannot accidentally mix with USD
+// @ts-expect-error: Cannot add different currencies
+const total = wallet + price;
+
+const weight = 1000 as Grams;
+const maxWeight = 5 as Kilograms;
+
+// @ts-expect-error: Cannot compare different units
+if (weight > maxWeight) { ... }
 ```
 
-### Validated Primitives
+---
 
-Create branded types that carry runtime validation:
+## 4. When: Developer Experience (DX) Without Constraints
+
+**Scenario**: "I want the IDE to show 'OrderId' instead of 'string' for clarity, but I don't want to force explicit conversions everywhere."
+
+**Solution**: Type Flavoring
 
 ```typescript
-type EmailAddress = Branded<string, "EmailAddress">;
-
-function validateEmail(email: string): EmailAddress | null {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return null;
-  }
-  return email as EmailAddress;
+interface Flavoring<K> {
+  readonly _type?: K; // Optional - doesn't really exist at runtime
 }
 
-type Age = Branded<number, "Age">;
+export type Flavor<T, K> = T & Flavoring<K>;
 
-function createAge(n: number): Age {
-  if (n < 0 || n > 125) {
-    throw new Error("Age must be between 0 and 125");
-  }
-  return n as Age;
-}
+type OrderId = Flavor<string, "OrderId">;
 
-function getBirthYear(age: Age, currentYear: number): number {
-  return currentYear - age;
-}
+// No explicit conversion needed
+let id: OrderId = "123"; // ✅ OK
 
-const myAge = createAge(36);
-const birthYear = getBirthYear(myAge, 2026); // 1990
-
-getBirthYear(36, 2026); // Error: Argument of type 'number' is not assignable to parameter of type 'Age'
+// IDE shows "OrderId" on hover, but plain string also works
+function process(id: OrderId): void { ... }
+process("raw_string"); // ✅ Works - helpful but not enforced
 ```
 
-### API Responses
+**When to use Flavoring vs Branding?**
 
-Model discriminated success/failure states:
+| Use Flavoring when... | Use Branding when... |
+|----------------------|---------------------|
+| Team needs clearer types during dev | Mixing types causes production bugs |
+| You're migrating from `any` | Invalid data causes critical errors |
+| You want self-documenting code | External/untrusted data enters your system |
+
+---
+
+## 5. When: Runtime Branching Based on State
+
+**Scenario**: "I need to handle API responses where success and failure follow different paths."
+
+**Solution**: Discriminated Union (not a Brand!)
 
 ```typescript
-type ApiSuccess<T> = T & { __success: true };
-type ApiFailure = {
-  code: number;
-  message: string;
-  error: Error;
-} & { __failure: true };
-
+// This is a DISCRIMINATED UNION, not a Brand
+type ApiSuccess<T> = T & { readonly _tag: "success" };
+type ApiFailure = { readonly _tag: "failure"; error: Error };
 type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
-function isApiSuccess<T>(response: ApiResponse<T>): response is ApiSuccess<T> {
-  return "__success" in response && response.__success === true;
-}
-
-const response = await fetchSomeEndpoint();
-
-if (isApiSuccess(response)) {
-  // response is ApiSuccess<T>
-} else {
-  // response is ApiFailure
+function handleResponse<T>(response: ApiResponse<T>): void {
+  if (response._tag === "success") {
+    // TypeScript knows response is ApiSuccess<T>
+    console.log("Data:", response);
+  } else {
+    // TypeScript knows response is ApiFailure
+    console.error("Error:", response.error);
+  }
 }
 ```
 
-## Unbranding
+> **Note**: The `_tag` property exists at runtime and controls flow. A Brand's `_brand` property is compile-time only and is erased.
 
-Extract the underlying type:
+---
+
+## ⚠️ Senior Best Practices
+
+### 1. Zero-Cost Abstraction
+
+Branded Types are **completely erased at compilation**. There's no impact on bundle size or runtime performance:
 
 ```typescript
-type Unbrand<T> = T extends Branded<infer K, any> ? K : T;
-
-type A = Unbrand<UserId>;  // string
-type B = Unbrand<string>;  // string
+type UserId = Branded<string, "UserId">;
+// Compiles to just: string
 ```
+
+### 2. JSON Persistence
+
+When you receive JSON from an API, Brand information is lost. You **must** re-instantiate via your factory functions:
+
+```typescript
+// Send: UserId is preserved through serialization
+const userId: UserId = parseUserId("user_123");
+localStorage.setItem("userId", userId); // Stored as plain string
+
+// Receive: Must re-validate
+const stored = localStorage.getItem("userId");
+if (stored) {
+  const userId = parseUserId(stored); // Re-instantiate with brand
+}
+```
+
+### 3. Interoperability
+
+A `UserId` (which is `string & Brand<"UserId">`) **remains a string**. You can call all string methods without unwrapping:
+
+```typescript
+type UserId = Branded<string, "UserId">;
+const id = "USER_123" as UserId;
+
+id.toLowerCase(); // ✅ Works - string methods preserved
+id.length;        // ✅ Works
+id.split("_");    // ✅ Works
+```
+
+### 4. Where `as` Should Appear
+
+```typescript
+// ✅ GOOD: Factory function - the only place "as Brand" belongs
+function parseEmail(input: string): Email {
+  if (!isValid(input)) throw new Error("Invalid");
+  return input as Email; // Validated here
+}
+
+// ❌ BAD: Component - indicates technical debt
+const email = userInput as Email; // Should use parseEmail() instead
+```
+
+---
+
+## Quick Reference: Branding vs Flavoring vs Discriminated Union
+
+| Pattern | Use Case | Runtime Property | Enforcement |
+|---------|----------|-----------------|-------------|
+| **Strict Brand** | IDs, Currencies, Units | None (erased) | Compile-time |
+| **Flavoring** | DX clarity, self-documenting code | Optional `?` | None (helpful only) |
+| **Discriminated Union** | Success/error states, state machines | Required tag | Runtime branching |
+
+---
 
 ## Key Takeaways
 
-- Use for critical domain primitives where mixing would cause bugs
-- Prefer `unique symbol` over string-based `__brand` for better safety
-- Create factory functions that validate at the creation point
-- Common uses: IDs, currency, email/URL, units of measure, API responses
-- The brand property is compile-time only—it does not exist at runtime
+- **Branded Types** prevent mixing incompatible values at compile-time
+- **`unique symbol`** is safer than string-based brands (cannot be forged)
+- **Brand Factories** enforce validation at the system entry point
+- **Flavoring** is for DX only—doesn't actually prevent errors
+- **Discriminated Unions** are for runtime branching, not type safety
+- Brands are **zero-cost**—erased at compilation
+- JSON **destroys** brands—re-validate on deserialization
+- **`as Brand` belongs only in factory/parser functions**

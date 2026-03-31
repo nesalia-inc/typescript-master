@@ -32,10 +32,16 @@ type UserName = Pick<User, "name" | "email">;
 // { name: string; email: string; }
 
 // Remove specific properties
-type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
+type Omit<T, K> = Pick<T, Exclude<keyof T, K>>;
 type UserWithoutPassword = Omit<User, "id">;
 // { name: string; email: string; }
 ```
+
+> **Senior Note:** Built-in `Omit<T, K extends keyof any>` allows omitting keys that don't exist on `T`. A stricter version:
+> ```typescript
+> type StrictOmit<T, K extends keyof T> = Omit<T, K>;
+> ```
+> Use `StrictOmit` when you want compile errors for non-existent keys.
 
 ## Union Helpers
 
@@ -44,9 +50,22 @@ type UserWithoutPassword = Omit<User, "id">;
 type Exclude<T, U> = T extends U ? never : T;
 type T1 = Exclude<"a" | "b" | "c", "a">; // "b" | "c"
 
-// Extract types from union
+// Extract types from union (inverse of Exclude)
 type Extract<T, U> = T extends U ? T : never;
 type T2 = Extract<"a" | "b" | "c", "a" | "b">; // "a" | "b"
+```
+
+### Discriminated Union Extraction
+
+```typescript
+type SSEEvent =
+  | { type: "message"; data: string }
+  | { type: "error"; code: number }
+  | { type: "ping" };
+
+// Extract a specific branch from a union
+type MessageEvent = Extract<SSEEvent, { type: "message" }>;
+// { type: "message"; data: string }
 ```
 
 ## Nullability
@@ -70,6 +89,10 @@ type Record<K extends keyof any, T> = { [P in K]: T };
 
 type PageInfo = Record<"home" | "about", { title: string; url: string }>;
 // { home: { title: string; url: string }; about: { title: string; url: string } }
+
+// Empty object type
+type EmptyObject = Record<string, never>;
+// {} - useful for "this must be empty" constraints
 ```
 
 ## Parameters and Return Type
@@ -79,12 +102,10 @@ type PageInfo = Record<"home" | "about", { title: string; url: string }>;
 type Parameters<T> = T extends (...args: infer P) => any ? P : never;
 
 // Extract return type
-type ReturnType<T> = T extends (...args: any[]) => infer R ? R : any;
-
-// Extract instance type from constructor
-type InstanceType<T extends new (...args: any[]) => any> =
-  T extends new (...args: any[]) => infer R ? R : any;
+type ReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
 ```
+
+> **Senior Note:** Built-in `ReturnType<T>` requires `T extends (...args: any[]) => any`. If you pass a non-function type, you'll get a **compile error**, not `any`. This is a safety feature to catch mistakes early.
 
 ## Constructor Types
 
@@ -125,6 +146,17 @@ const obj = makeObject({
 });
 ```
 
+> **Senior Note:** `ThisType` requires `noImplicitThis: true` (or `strict: true`) in `tsconfig.json`. Without it, `ThisType` does nothing.
+
+## Awaited
+
+```typescript
+// Unwrap Promises recursively
+type A1 = Awaited<Promise<string>>;          // string
+type A2 = Awaited<Promise<Promise<number>>>; // number
+type A3 = Awaited<Promise<{ id: string }>>;  // { id: string }
+```
+
 ## Template Literal Utilities
 
 ```typescript
@@ -134,7 +166,14 @@ type Capitalize<S extends string> = intrinsic;
 type Uncapitalize<S extends string> = intrinsic;
 ```
 
+> **Senior Note:** These are *intrinsic* types—implemented directly in the TypeScript compiler, not in user code.
+
 ## Combining Utility Types
+
+> **Senior Note:** Chaining more than two utilities hurts IDE performance and readability. Use `Prettify<T>` to flatten the result:
+> ```typescript
+> type Prettify<T> = { [K in keyof T]: T[K] } & {};
+> ```
 
 ```typescript
 interface ApiResponse {
@@ -145,7 +184,7 @@ interface ApiResponse {
 }
 
 // Create update type (all optional except id)
-type UpdateUser = Partial<Omit<ApiResponse, "id" | "createdAt" | "updatedAt">> & { id: string };
+type UpdateUser = Prettify<Partial<Omit<ApiResponse, "id" | "createdAt" | "updatedAt">> & { id: string }>;
 
 // Create response without timestamps
 type UserPreview = Omit<ApiResponse, "createdAt" | "updatedAt">;
@@ -185,9 +224,10 @@ type StyleProps = Pick<ButtonProps, "className" | "variant" | "size">;
 When building an API client:
 
 ```typescript
-interface ApiEndpoint<TResponse, TRequest = never> {
+// Use void/undefined for no request body, not unknown
+interface ApiEndpoint<TResponse, TRequest = void> {
   response: TResponse;
-  request?: TRequest extends never ? unknown : TRequest;
+  request: TRequest;
 }
 
 // Define endpoints
@@ -196,23 +236,20 @@ interface Endpoints {
   createPost: ApiEndpoint<Post, { title: string; content: string }>;
   updateUser: ApiEndpoint<User, Partial<Pick<User, "name" | "email">>>;
   deletePost: ApiEndpoint<void, { id: string }>;
+  getVersion: ApiEndpoint<string>;  // request is void
 }
 
 // Extract all response types
 type ApiResponses = {
   [K in keyof Endpoints]: Endpoints[K]["response"];
 };
-// { getUser: User; createPost: Post; updateUser: User; deletePost: void }
+// { getUser: User; createPost: Post; updateUser: User; deletePost: void; getVersion: string }
 
 // Extract all request types (non-void)
 type ApiRequests = {
-  [K in keyof Endpoints]: Endpoints[K] extends { request: infer R }
-    ? R extends unknown
-      ? never
-      : R
-    : never;
+  [K in keyof Endpoints]: Endpoints[K]["request"];
 };
-// { createPost: { title: string; content: string }; updateUser: ...; deletePost: ... }
+// { getUser: void; createPost: { title: string; content: string }; ... }
 ```
 
 ### Example 3: Database Model Mutations
@@ -258,39 +295,35 @@ interface FormField<T = any> {
   value: T;
   error?: string;
   touched: boolean;
-  dirty: boolean;
+}
+
+// Use a literal type to track dirty state
+interface TypedFormField<T> {
+  value: T;
+  error?: string;
+  touched: boolean;
+  dirty: boolean;  // boolean = true | false, so extends true won't work!
 }
 
 interface FormSchema<T> {
   fields: {
-    [K in keyof T]: FormField<T[K]>;
+    [K in keyof T]: TypedFormField<T[K]>;
   };
   isValid: boolean;
-  isDirty: boolean;
 }
 
 // Extract field types from form schema
 type FormValues<T> = {
-  [K in keyof T]: T[K] extends FormField<infer V> ? V : T[K];
+  [K in keyof T]: T[K] extends { value: infer V } ? V : T[K];
 };
 
-// Extract only dirty (modified) fields
+// Better approach: mark dirty fields as optional using mapped types
 type DirtyFields<T> = {
-  [K in keyof T as T[K] extends FormField<any> ? (T[K]["dirty"] extends true ? K : never) : never]: T[K] extends FormField<infer V> ? V : never;
+  [K in keyof T]?: T[K] extends { value: infer V; dirty: true } ? V : never;
 };
-
-// Usage
-interface LoginForm {
-  email: FormField<string>;
-  password: FormField<string>;
-}
-
-type LoginValues = FormValues<LoginForm>;
-// { email: string; password: string }
-
-type ModifiedFields = DirtyFields<LoginForm>;
-// { email?: string; password?: string } (only if dirty)
 ```
+
+> **Senior Note:** `dirty: boolean` will never `extend true` specifically because `boolean` is `true | false`. To track dirty state at the type level, use a literal union: `dirty: true | false` and filter with `T[K]["dirty"] extends true ? K : never`. Alternatively, make everything optional in the dirty type since you don't know which fields are dirty until runtime.
 
 ### Example 5: Plugin/Extension System
 
@@ -309,17 +342,13 @@ interface CoreApp {
   services: Record<string, any>;
 }
 
-// Extract only the plugin names
-type PluginNames = Extract<keyof Plugin, string>;
+// Extract only the plugin names (Extract is inverse of Exclude)
+type PluginName = Extract<keyof Plugin, string>;
 // "name" | "version" | "dependencies"
 
 // Make certain properties required in a derived type
 type RequiredPlugin = Required<Pick<Plugin, "name" | "version">> & Partial<Pick<Plugin, "dependencies">>;
 // { name: string; version: string; dependencies?: string[] }
-
-// Create a type for enabled plugins only (non-null)
-type EnabledPlugins = NonNullable<Plugin>[];
-// Plugin[] (since Plugin is already non-nullable)
 ```
 
 ### Example 6: Route Types for SPA Router
@@ -367,11 +396,18 @@ type RouteMeta<T extends keyof AppRoutes> = AppRoutes[T]["meta"];
 | Form values vs form schema | `FormValues<T>` pattern |
 | Plugin configurations | `Required`, `Partial`, `Pick` |
 | Route types | `Pick`, `Omit`, mapped types |
+| Picking union branches | `Extract<T, U>` |
 
 ## Key Takeaways
 
 - Utility types transform existing types without redefining them
-- `Partial`, `Required`, `Readonly`, `Pick`, `Omit` are most common
-- Combine utilities to create precise type transformations
-- Most built-in utilities are themselves mapped types or conditional types
-- Essential for building reusable component libraries and APIs
+- `Partial`, `Required`, `Readonly`, `Pick`, `Omit` are the "big five"
+- `Exclude` for unions, `Omit` for objects—don't mix them up
+- Use `StrictOmit<T, K extends keyof T>` if you want errors for non-existent keys
+- Built-in `ReturnType<T>` requires a function type—non-functions cause compile errors
+- `ThisType<T>` requires `strict: true` or `noImplicitThis: true`
+- Use `Prettify<T>` to flatten chained utilities for better IDE hover
+- `Extract<T, U>` picks specific branches from discriminated unions
+- `Awaited<T>` unwraps Promises recursively
+- `Record<string, never>` represents "this object must be empty"
+- Avoid chaining more than two utilities—define intermediate types
